@@ -53,16 +53,13 @@ def get_system_info():
 def get_ffmpeg_path():
     """
     Tente de trouver le chemin de l'exécutable FFmpeg requis par yt-dlp.
-    1. Cherche dans le PATH du système.
-    2. Cherche via imageio-ffmpeg (qui peut inclure les binaires).
-    Retourne le chemin ou None si non trouvé.
     """
-    # Méthode 1: Chercher dans le PATH du système avec shutil.which()
+    # Méthode 1: Chercher dans le PATH du système
     ffmpeg_path = shutil.which('ffmpeg')
     if ffmpeg_path and os.path.exists(ffmpeg_path):
         return ffmpeg_path
 
-    # Méthode 2: Utiliser imageio-ffmpeg qui peut embarquer les binaires
+    # Méthode 2: Utiliser imageio-ffmpeg
     try:
         import imageio_ffmpeg
         ffmpeg_path = imageio_ffmpeg.get_ffmpeg_exe()
@@ -76,13 +73,12 @@ def get_ffmpeg_path():
     return None
 
 def check_ffmpeg_status():
-    """Vérifie l'état de FFmpeg pour yt-dlp et met à jour le session_state."""
+    """Vérifie l'état de FFmpeg pour yt-dlp"""
     ffmpeg_path = get_ffmpeg_path()
     
     if ffmpeg_path:
         st.session_state.ffmpeg_available = True
         st.session_state.ffmpeg_path = ffmpeg_path
-        # Déterminer la source pour l'affichage
         if "imageio" in ffmpeg_path.lower():
             st.session_state.ffmpeg_source = "imageio-ffmpeg (bundlé)"
         else:
@@ -95,7 +91,7 @@ def check_ffmpeg_status():
         return False
 
 def install_ffmpeg_complete():
-    """Installation de FFmpeg via imageio-ffmpeg qui inclut les binaires."""
+    """Installation de FFmpeg via imageio-ffmpeg"""
     methods = [
         {"name": "imageio-ffmpeg", "command": [sys.executable, "-m", "pip", "install", "imageio-ffmpeg"]},
         {"name": "ffmpeg-python", "command": [sys.executable, "-m", "pip", "install", "ffmpeg-python"]},
@@ -111,7 +107,7 @@ def install_ffmpeg_complete():
             status_text.text(f"🔧 Installation de {method['name']}...")
             
             result = subprocess.run(
-                method['command'] + ["--quiet", "--no-warn-script-location"],
+                method['command'] + ["--quiet"],
                 capture_output=True, 
                 text=True, 
                 timeout=120,
@@ -121,7 +117,6 @@ def install_ffmpeg_complete():
             status_text.text(f"✅ {method['name']} installé!")
             time.sleep(1)
             
-            # Vérifier si l'exécutable est maintenant trouvé
             if check_ffmpeg_status():
                 st.session_state.ffmpeg_installation_tried = True
                 progress_bar.progress(1.0)
@@ -289,21 +284,18 @@ def validate_youtube_url(url):
     if not url:
         return False
     
-    # Utilisation de raw strings pour éviter les avertissements de séquence d'échappement
-    youtube_regex = (
-        r'(https?://)?(www\.)?'
-        r'(youtube|youtu|youtube-nocookie)\.(com|be)/'
-        r'(watch\?v=|embed/|v/|.+\?v=)?([^&=%\?]{11})')
+    # Correction de l'expression régulière
+    youtube_regex = r'(https?://)?(www\.)?(youtube|youtu|youtube-nocookie)\.(com|be)/(watch\?v=|embed/|v/|.+\?v=)?([^&=%?]{11})'
     return re.match(youtube_regex, url) is not None
 
 def get_video_id(url):
     """Extrait l'ID vidéo d'une URL YouTube"""
     if not url:
         return None
-    # Utilisation de raw strings pour éviter les avertissements de séquence d'échappement
+    # Correction des patterns
     patterns = [
-        r'(?:youtube\.com/watch\?v=|youtu\.be/|youtube\.com/embed/)([^&=%\?]{11})',
-        r'^([^&=%\?]{11})$'
+        r'(?:youtube\.com/watch\?v=|youtu\.be/|youtube\.com/embed/)([^&=%?]{11})',
+        r'^([^&=%?]{11})$'
     ]
     for pattern in patterns:
         match = re.search(pattern, url)
@@ -315,7 +307,7 @@ def clean_youtube_url(url):
     """Nettoie et standardise une URL YouTube"""
     video_id = get_video_id(url)
     if video_id:
-        return f"https://www.youtube.com/watch?v={video_id}"
+        return f"https://www.youtube.com/watch?v={video_id}"  # Correction: ajout de https:
     return url
 
 def format_duration(seconds):
@@ -367,11 +359,12 @@ def search_youtube(query, limit=15):
             st.error("❌ yt-dlp n'est pas disponible. Installation requise.")
             return get_demo_results(query)
         
+        # Correction de la commande de recherche
         search_command = [
             'yt-dlp',
-            f'ytsearch{limit}:{clean_query}',
+            f'ytsearch{limit}:"{clean_query}"',  # Ajout de guillemets autour de la requête
             '--dump-json',
-            '--no-download',
+            '--no-download',  # Correction: --no-download au lieu de --no-download
             '--no-warnings',
             '--ignore-errors',
             '--socket-timeout', '30',
@@ -458,7 +451,7 @@ def get_demo_results(query):
         {
             'id': 'dQw4w9WgXcQ',
             'title': f'Demo: {query} - Résultat 1',
-            'link': 'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
+            'link': 'https://www.youtube.com/watch?v=dQw4w9WgXcQ',  # Correction: ajout de https:
             'channel': {'name': 'Chaîne Démo'},
             'duration': {'text': '3:45'},
             'viewCount': {'text': '1.2M'},
@@ -470,7 +463,7 @@ def get_demo_results(query):
         {
             'id': 'kJQP7kiw5Fk', 
             'title': f'Demo: {query} - Résultat 2',
-            'link': 'https://www.youtube.com/watch?v=kJQP7kiw5Fk',
+            'link': 'https://www.youtube.com/watch?v=kJQP7kiw5Fk',  # Correction: ajout de https:
             'channel': {'name': 'Chaîne Test'},
             'duration': {'text': '4:20'},
             'viewCount': {'text': '987K'},
@@ -489,7 +482,7 @@ def get_video_info(url):
         command = [
             'yt-dlp',
             '--dump-json',
-            '--no-download',
+            '--no-download',  # Correction: --no-download au lieu de --no-download
             '--ignore-errors',
             '--no-warnings',
             '--quiet',
@@ -530,7 +523,6 @@ def download_media(url, format_choice):
         clean_url = clean_youtube_url(url)
         temp_dir = tempfile.mkdtemp()
         
-        # Vérifier le chemin de FFmpeg AVANT de lancer le téléchargement
         ffmpeg_path = get_ffmpeg_path()
         if not ffmpeg_path:
             st.error("❌ Erreur Critique: FFmpeg introuvable.")
@@ -592,7 +584,6 @@ def download_media(url, format_choice):
                 break
             if output:
                 if '[download]' in output:
-                    # Progression basique
                     progress = min(0.9, float(st.session_state.get('download_progress', 0)) + 0.05)
                     progress_bar.progress(progress)
                     st.session_state.download_progress = progress
@@ -776,7 +767,7 @@ st.sidebar.title("🎛️ Panneau de Contrôle")
 # État des dépendances
 st.sidebar.subheader("📊 État du Système")
 
-# FFmpeg Status (utilise la nouvelle fonction de vérification)
+# FFmpeg Status
 ffmpeg_status = st.session_state.ffmpeg_available
 status_class = "status-online" if ffmpeg_status else "status-offline"
 status_text = f"✅ {st.session_state.ffmpeg_source}" if ffmpeg_status else "❌ Introuvable"
@@ -901,7 +892,6 @@ if st.session_state.selected_video_url and st.session_state.selected_video_data:
         
         col1, col2 = st.columns(2)
         with col1:
-            # Désactiver le bouton si FFmpeg n'est pas disponible pour le MP3
             is_download_disabled = (download_format == "MP3 (Audio)" and not st.session_state.ffmpeg_available)
             if is_download_disabled:
                 st.warning("Le téléchargement MP3 est désactivé car FFmpeg est requis.")

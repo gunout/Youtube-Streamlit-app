@@ -6,7 +6,6 @@ import time
 import math
 import json
 import re
-import requests
 
 # --- Configuration ---
 st.set_page_config(
@@ -17,20 +16,20 @@ st.set_page_config(
 )
 
 # --- Session State ---
-session_defaults = {
-    'title_typed': False,
-    'search_results': None,
-    'selected_video_url': None,
-    'selected_video_data': None,
-    'current_page': 1,
-    'total_pages': 0
-}
+if 'title_typed' not in st.session_state:
+    st.session_state.title_typed = False
+if 'search_results' not in st.session_state:
+    st.session_state.search_results = None
+if 'selected_video_url' not in st.session_state:
+    st.session_state.selected_video_url = None
+if 'selected_video_data' not in st.session_state:
+    st.session_state.selected_video_data = None
+if 'current_page' not in st.session_state:
+    st.session_state.current_page = 1
+if 'total_pages' not in st.session_state:
+    st.session_state.total_pages = 0
 
-for key, value in session_defaults.items():
-    if key not in st.session_state:
-        st.session_state[key] = value
-
-# --- CSS ---
+# --- CSS (identique à avant) ---
 def load_css(theme_name):
     if theme_name == "Cyberpunk":
         cyberpunk_css = """
@@ -44,8 +43,10 @@ def load_css(theme_name):
         """
         st.markdown(cyberpunk_css, unsafe_allow_html=True)
 
-# --- Fonctions utilitaires ---
+# --- Fonctions optimisées ---
+
 def validate_youtube_url(url):
+    """Valide l'URL YouTube"""
     youtube_regex = (
         r'(https?://)?(www\.)?'
         '(youtube|youtu|youtube-nocookie)\.(com|be)/'
@@ -53,6 +54,7 @@ def validate_youtube_url(url):
     return re.match(youtube_regex, url) is not None
 
 def get_video_id(url):
+    """Extrait l'ID de la vidéo YouTube"""
     if not url:
         return None
     patterns = [
@@ -66,12 +68,14 @@ def get_video_id(url):
     return None
 
 def clean_youtube_url(url):
+    """Nettoie l'URL YouTube pour enlever les paramètres inutiles"""
     video_id = get_video_id(url)
     if video_id:
         return f"https://www.youtube.com/watch?v={video_id}"
     return url
 
 def format_duration(seconds):
+    """Formate la durée en secondes"""
     try:
         seconds = int(seconds)
         hours = seconds // 3600
@@ -84,30 +88,14 @@ def format_duration(seconds):
     except:
         return "N/A"
 
-# --- Vérification des dépendances ---
-def check_ffmpeg():
-    """Vérifie si FFmpeg est disponible"""
-    try:
-        result = subprocess.run(['ffmpeg', '-version'], capture_output=True, text=True, timeout=10)
-        return result.returncode == 0
-    except:
-        return False
-
-def check_yt_dlp():
-    """Vérifie la version de yt-dlp"""
-    try:
-        result = subprocess.run(['yt-dlp', '--version'], capture_output=True, text=True, timeout=10)
-        return result.stdout.strip() if result.returncode == 0 else None
-    except:
-        return None
-
-# --- FONCTION DE RECHERCHE AMÉLIORÉE ---
+# --- FONCTION DE RECHERCHE OPTIMISÉE ---
 @st.cache_data(ttl=3600, show_spinner="Recherche en cours...")
 def search_youtube(query, limit=15):
     """
-    Recherche avec gestion robuste des erreurs
+    Recherche optimisée avec gestion des erreurs améliorée
     """
     try:
+        # Nettoyer la requête
         clean_query = query.strip()
         if not clean_query:
             return []
@@ -119,7 +107,6 @@ def search_youtube(query, limit=15):
             '--no-download',
             '--no-warnings',
             '--quiet',
-            '--ignore-errors',
             '--socket-timeout', '30',
             '--source-timeout', '30'
         ]
@@ -129,7 +116,7 @@ def search_youtube(query, limit=15):
             capture_output=True, 
             text=True, 
             check=True, 
-            timeout=45
+            timeout=45  # Timeout augmenté à 45 secondes
         )
         
         videos = []
@@ -157,12 +144,15 @@ def search_youtube(query, limit=15):
     except subprocess.TimeoutExpired:
         st.warning("⏱️ Recherche trop longue, utilisation des résultats de démonstration")
         return get_demo_results(query)
+    except subprocess.CalledProcessError as e:
+        st.warning(f"⚠️ Recherche échouée, mode démonstration activé: {e.stderr[:100]}...")
+        return get_demo_results(query)
     except Exception as e:
         st.warning(f"⚠️ Erreur de recherche: {str(e)}")
         return get_demo_results(query)
 
 def get_demo_results(query):
-    """Résultats de démonstration"""
+    """Résultats de démonstration pour tests"""
     return [
         {
             'id': 'dQw4w9WgXcQ',
@@ -184,125 +174,128 @@ def get_demo_results(query):
         }
     ]
 
-# --- FONCTION DE TÉLÉCHARGEMENT CORRIGÉE ---
+# --- FONCTION INFO VIDÉO OPTIMISÉE ---
+def get_video_info(url):
+    """
+    Récupère les infos vidéo avec timeout étendu et retry
+    """
+    # Nettoyer l'URL d'abord
+    clean_url = clean_youtube_url(url)
+    
+    for attempt in range(2):  # 2 tentatives
+        try:
+            command = [
+                'yt-dlp',
+                '--dump-json',
+                '--no-download',
+                '--no-warnings',
+                '--quiet',
+                '--socket-timeout', '45',
+                '--source-timeout', '45',
+                clean_url
+            ]
+            
+            result = subprocess.run(
+                command, 
+                capture_output=True, 
+                text=True, 
+                check=True, 
+                timeout=60  # Timeout à 60 secondes
+            )
+            
+            video_data = json.loads(result.stdout)
+            duration = video_data.get('duration')
+            duration_text = format_duration(duration) if duration else 'N/A'
+            
+            return {
+                'id': video_data.get('id'),
+                'title': video_data.get('title', 'Titre non disponible'),
+                'link': clean_url,
+                'channel': {'name': video_data.get('uploader', 'Chaîne inconnue')},
+                'duration': {'text': duration_text},
+                'viewCount': {'text': f"{video_data.get('view_count', 0):,}"},
+                'thumbnail': [{'url': video_data.get('thumbnail')}]
+            }
+            
+        except subprocess.TimeoutExpired:
+            if attempt == 0:  # Première tentative échouée
+                st.warning("⌛ Timeout, nouvelle tentative...")
+                time.sleep(2)
+                continue
+            else:
+                st.error("⏱️ Délai d'attente dépassé pour cette vidéo")
+                return None
+        except Exception as e:
+            st.error(f"❌ Erreur lors du chargement: {str(e)}")
+            return None
+    
+    return None
+
+# --- FONCTION TÉLÉCHARGEMENT OPTIMISÉE ---
 def download_media(url, format_choice):
-    """
-    Téléchargement avec gestion des problèmes de signature YouTube
-    """
+    """Téléchargement avec gestion d'erreurs améliorée"""
     try:
+        # Nettoyer l'URL
         clean_url = clean_youtube_url(url)
+        
         temp_dir = tempfile.mkdtemp()
+        progress_placeholder = st.empty()
         
-        st.info("🔄 Configuration du téléchargement...")
+        progress_placeholder.info("🔄 Préparation du téléchargement...")
         
-        # Configuration de base pour yt-dlp
-        base_command = [
-            'yt-dlp',
-            '--ignore-errors',
-            '--no-warnings',
-            '--socket-timeout', '60',
-            '--source-timeout', '60',
-            '--retries', '3',
-        ]
-        
-        # Options spécifiques au format
         if format_choice == "MP4 (Vidéo)":
             output_template = os.path.join(temp_dir, "%(title).100s.%(ext)s")
-            base_command.extend([
-                '-f', 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
+            command = [
+                'yt-dlp', 
+                '-f', 'best[height<=720]',
                 '--merge-output-format', 'mp4',
-            ])
+                '--socket-timeout', '60',
+                '--source-timeout', '60',
+                '--retries', '3',
+                '-o', output_template, 
+                clean_url
+            ]
         else:  # MP3
             output_template = os.path.join(temp_dir, "%(title).100s.%(ext)s")
-            base_command.extend([
+            command = [
+                'yt-dlp',
                 '-x',
                 '--audio-format', 'mp3',
                 '--audio-quality', '0',
-            ])
+                '--socket-timeout', '60',
+                '--source-timeout', '60',
+                '--retries', '3',
+                '-o', output_template,
+                clean_url
+            ]
         
-        # Ajouter le template de sortie et l'URL
-        base_command.extend(['-o', output_template, clean_url])
+        progress_placeholder.info("📥 Téléchargement en cours...")
         
-        st.info("📥 Téléchargement en cours...")
+        # Exécution avec timeout long
+        process = subprocess.run(command, capture_output=True, text=True, timeout=300, check=True)
         
-        # Exécution
-        process = subprocess.run(base_command, capture_output=True, text=True, timeout=300)
+        progress_placeholder.success("✅ Téléchargement terminé!")
         
-        if process.returncode != 0:
-            st.warning("⚠️ Certains formats peuvent ne pas être disponibles, tentative de téléchargement des formats de base...")
-            
-            # Fallback: utiliser des formats plus simples
-            fallback_command = base_command.copy()
-            if format_choice == "MP4 (Vidéo)":
-                # Enlever les options de format complexes
-                for i, item in enumerate(fallback_command):
-                    if item == '-f':
-                        fallback_command[i+1] = 'best[height<=480]'
-                        break
-            else:
-                # Pour MP3, on garde la même commande
-                pass
-                
-            process = subprocess.run(fallback_command, capture_output=True, text=True, timeout=300)
+        # Chercher le fichier
+        for file in os.listdir(temp_dir):
+            if file.endswith(('.mp4', '.mp3')):
+                file_path = os.path.join(temp_dir, file)
+                mime_type = "video/mp4" if format_choice == "MP4 (Vidéo)" else "audio/mpeg"
+                return file_path, file, mime_type
         
-        if process.returncode == 0:
-            st.success("✅ Téléchargement terminé!")
-            
-            # Chercher le fichier
-            for file in os.listdir(temp_dir):
-                if file.endswith(('.mp4', '.mp3', '.webm', '.m4a')):
-                    file_path = os.path.join(temp_dir, file)
-                    mime_type = "video/mp4" if format_choice == "MP4 (Vidéo)" else "audio/mpeg"
-                    return file_path, file, mime_type
-            
-            raise Exception("Aucun fichier trouvé après téléchargement")
-        else:
-            raise Exception(f"Échec du téléchargement: {process.stderr}")
-            
+        raise Exception("Fichier non trouvé")
+        
     except subprocess.TimeoutExpired:
         st.error("⏱️ Timeout lors du téléchargement")
+        return None, None, None
+    except subprocess.CalledProcessError as e:
+        st.error(f"❌ Erreur de téléchargement: {e.stderr[:200]}...")
         return None, None, None
     except Exception as e:
         st.error(f"❌ Erreur: {str(e)}")
         return None, None, None
-
-# --- FONCTION POUR OBTENIR LES INFOS VIDÉO ---
-def get_video_info(url):
-    """
-    Récupère les informations de la vidéo avec gestion d'erreurs
-    """
-    try:
-        clean_url = clean_youtube_url(url)
-        
-        command = [
-            'yt-dlp',
-            '--dump-json',
-            '--no-download',
-            '--ignore-errors',
-            '--no-warnings',
-            '--quiet',
-            clean_url
-        ]
-        
-        result = subprocess.run(command, capture_output=True, text=True, timeout=30, check=True)
-        video_data = json.loads(result.stdout)
-        
-        duration = video_data.get('duration')
-        duration_text = format_duration(duration) if duration else 'N/A'
-        
-        return {
-            'id': video_data.get('id'),
-            'title': video_data.get('title', 'Titre non disponible'),
-            'link': clean_url,
-            'channel': {'name': video_data.get('uploader', 'Chaîne inconnue')},
-            'duration': {'text': duration_text},
-            'viewCount': {'text': f"{video_data.get('view_count', 0):,}"},
-            'thumbnail': [{'url': video_data.get('thumbnail')}]
-        }
-        
-    except Exception as e:
-        st.error(f"❌ Erreur lors du chargement des informations: {str(e)}")
-        return None
+    finally:
+        progress_placeholder.empty()
 
 # --- INTERFACE UTILISATEUR ---
 def display_metadata(video_data):
@@ -346,25 +339,7 @@ if not st.session_state.title_typed:
 else:
     st.markdown('<h1 class="glitch" data-text="CYBER-STREAM TERMINAL">CYBER-STREAM TERMINAL</h1>', unsafe_allow_html=True)
 
-# Vérification des dépendances
-st.sidebar.title("🔧 Vérification des Dépendances")
-
-yt_dlp_version = check_yt_dlp()
-ffmpeg_available = check_ffmpeg()
-
-if yt_dlp_version:
-    st.sidebar.success(f"✅ yt-dlp: {yt_dlp_version}")
-else:
-    st.sidebar.error("❌ yt-dlp non disponible")
-
-if ffmpeg_available:
-    st.sidebar.success("✅ FFmpeg disponible")
-else:
-    st.sidebar.warning("⚠️ FFmpeg non trouvé - certaines fonctionnalités peuvent être limitées")
-
-st.sidebar.markdown("---")
-
-# Contrôles principaux
+st.sidebar.title("🎛️ Contrôles")
 search_query = st.sidebar.text_input("🔍 Rechercher:", key="search_input")
 download_format = st.sidebar.selectbox("Format:", ["MP4 (Vidéo)", "MP3 (Audio)"])
 
@@ -435,54 +410,42 @@ if st.session_state.selected_video_url and st.session_state.selected_video_data:
         embed_url = f"https://www.youtube.com/embed/{video_id}"
         st.components.v1.iframe(embed_url, height=400)
         
-        col1, col2 = st.columns([1, 1])
-        with col1:
-            if st.button("⬇️ Télécharger", use_container_width=True):
-                file_path, file_name, mime_type = download_media(
-                    st.session_state.selected_video_url, 
-                    download_format
+        if st.button("⬇️ Télécharger"):
+            file_path, file_name, mime_type = download_media(
+                st.session_state.selected_video_url, 
+                download_format
+            )
+            if file_path:
+                with open(file_path, "rb") as f:
+                    bytes_data = f.read()
+                
+                st.download_button(
+                    label=f"💾 Télécharger {file_name}",
+                    data=bytes_data,
+                    file_name=file_name,
+                    mime=mime_type
                 )
-                if file_path:
-                    with open(file_path, "rb") as f:
-                        bytes_data = f.read()
-                    
-                    st.download_button(
-                        label=f"💾 Télécharger {file_name}",
-                        data=bytes_data,
-                        file_name=file_name,
-                        mime=mime_type,
-                        use_container_width=True
-                    )
-                    
-                    # Nettoyage
-                    try:
-                        os.unlink(file_path)
-                        os.rmdir(os.path.dirname(file_path))
-                    except:
-                        pass
+                
+                # Nettoyage
+                try:
+                    os.unlink(file_path)
+                    os.rmdir(os.path.dirname(file_path))
+                except:
+                    pass
 
-        with col2:
-            if st.button("🗑️ Effacer la sélection", use_container_width=True):
-                st.session_state.selected_video_url = None
-                st.session_state.selected_video_data = None
-                st.rerun()
+        if st.button("🗑️ Effacer la sélection"):
+            st.session_state.selected_video_url = None
+            st.session_state.selected_video_data = None
+            st.rerun()
 
-elif not st.session_state.search_results and not st.session_state.selected_video_url:
+elif not st.session_state.search_results:
     st.info("🔍 Lancez une recherche ou collez une URL YouTube")
 
-# Instructions de dépannage
-with st.sidebar.expander("🔧 Dépannage"):
-    st.write("""
-    **Problèmes courants:**
-    
-    1. **Erreurs de signature YouTube:**
-       - Mettez à jour yt-dlp: `pip install --upgrade yt-dlp`
-    
-    2. **FFmpeg manquant:**
-       - Windows: `pip install ffmpeg-python`
-       - Linux: `apt-get install ffmpeg`
-       - Mac: `brew install ffmpeg`
-    
-    3. **Timeouts:**
-       - Réessayez ou utilisez une connexion plus stable
-    """)
+# Vérification yt-dlp
+st.sidebar.markdown("---")
+if st.sidebar.button("🔧 Vérifier yt-dlp"):
+    try:
+        result = subprocess.run(['yt-dlp', '--version'], capture_output=True, text=True, timeout=10)
+        st.sidebar.success(f"✅ yt-dlp: {result.stdout.strip()}")
+    except:
+        st.sidebar.error("❌ yt-dlp non disponible")

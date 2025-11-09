@@ -8,7 +8,7 @@ import json
 import re
 import sys
 import platform
-import shutil  # <-- Important pour trouver les exécutables
+import shutil
 from datetime import datetime
 
 # --- Configuration ---
@@ -29,7 +29,7 @@ session_defaults = {
     'total_pages': 0,
     'ffmpeg_available': False,
     'ffmpeg_source': None,
-    'ffmpeg_path': None, # Stocker le chemin trouvé
+    'ffmpeg_path': None,
     'ffmpeg_installation_tried': False,
     'download_history': [],
     'dependencies_checked': False,
@@ -41,6 +41,14 @@ for key, value in session_defaults.items():
         st.session_state[key] = value
 
 # --- Système et Dépendances ---
+
+def get_system_info():
+    """Récupère les informations système"""
+    return {
+        "platform": platform.system(),
+        "python_version": platform.python_version(),
+        "architecture": platform.architecture()[0]
+    }
 
 def get_ffmpeg_path():
     """
@@ -63,7 +71,7 @@ def get_ffmpeg_path():
     except ImportError:
         pass
     except Exception:
-        pass # Ignore les autres erreurs
+        pass
 
     return None
 
@@ -280,16 +288,19 @@ def validate_youtube_url(url):
     """Validation améliorée des URLs YouTube"""
     if not url:
         return False
+    
+    # Utilisation de raw strings pour éviter les avertissements de séquence d'échappement
     youtube_regex = (
         r'(https?://)?(www\.)?'
-        '(youtube|youtu|youtube-nocookie)\.(com|be)/'
-        '(watch\?v=|embed/|v/|.+\?v=)?([^&=%\?]{11})')
+        r'(youtube|youtu|youtube-nocookie)\.(com|be)/'
+        r'(watch\?v=|embed/|v/|.+\?v=)?([^&=%\?]{11})')
     return re.match(youtube_regex, url) is not None
 
 def get_video_id(url):
     """Extrait l'ID vidéo d'une URL YouTube"""
     if not url:
         return None
+    # Utilisation de raw strings pour éviter les avertissements de séquence d'échappement
     patterns = [
         r'(?:youtube\.com/watch\?v=|youtu\.be/|youtube\.com/embed/)([^&=%\?]{11})',
         r'^([^&=%\?]{11})$'
@@ -397,6 +408,13 @@ def search_youtube(query, limit=15):
         
         videos = []
         output_lines = result.stdout.splitlines()
+        
+        if st.session_state.debug_mode:
+            st.markdown(f"""
+            <div class='debug-box'>
+            Nombre de lignes retournées: {len(output_lines)}
+            </div>
+            """, unsafe_allow_html=True)
         
         for line in output_lines:
             if line.strip():
@@ -538,7 +556,7 @@ def download_media(url, format_choice):
                 '--ignore-errors',
                 '--no-warnings',
                 '-o', output_template,
-                '--ffmpeg-location', ffmpeg_path,  # <-- CORRECTION CRUCIALE
+                '--ffmpeg-location', ffmpeg_path,
                 clean_url
             ]
         else:  # MP3
@@ -550,7 +568,7 @@ def download_media(url, format_choice):
                 '--ignore-errors',
                 '--no-warnings',
                 '-o', output_template,
-                '--ffmpeg-location', ffmpeg_path, # <-- CORRECTION CRUCIALE
+                '--ffmpeg-location', ffmpeg_path,
                 clean_url
             ]
             st.success(f"🎵 Conversion MP3 avec FFmpeg activée!")
@@ -654,7 +672,7 @@ def display_metadata(video_data):
     with col1:
         thumbnail_list = video_data.get('thumbnail', [])
         if thumbnail_list: 
-            st.image(thumbnail_list[0]['url'], width=200, use_column_width=False)
+            st.image(thumbnail_list[0]['url'], width=200, use_container_width=False)
     with col2:
         title = video_data.get('title', 'Titre non disponible')
         channel_name = video_data.get('channel', {}).get('name', 'Chaîne inconnue')
@@ -699,7 +717,7 @@ def display_video_card(video, index):
         with col_img:
             thumbnail_list = video.get('thumbnail', [])
             if thumbnail_list: 
-                st.image(thumbnail_list[0]['url'], width=120, use_column_width=False)
+                st.image(thumbnail_list[0]['url'], width=120, use_container_width=False)
         with col_info:
             title = video.get('title', 'Sans titre')
             channel_name = video.get('channel', {}).get('name', 'Chaîne inconnue')
@@ -760,7 +778,7 @@ st.sidebar.subheader("📊 État du Système")
 
 # FFmpeg Status (utilise la nouvelle fonction de vérification)
 ffmpeg_status = st.session_state.ffmpeg_available
-status_class = "status-online" if ffmpeg_status else "status-offline" # Changé à 'offline' car c'est critique
+status_class = "status-online" if ffmpeg_status else "status-offline"
 status_text = f"✅ {st.session_state.ffmpeg_source}" if ffmpeg_status else "❌ Introuvable"
 
 st.sidebar.markdown(f"""

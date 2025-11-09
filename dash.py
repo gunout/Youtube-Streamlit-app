@@ -8,6 +8,7 @@ import json
 import re
 import sys
 import platform
+import shutil  # <-- Important pour trouver les exécutables
 from datetime import datetime
 
 # --- Configuration ---
@@ -28,10 +29,11 @@ session_defaults = {
     'total_pages': 0,
     'ffmpeg_available': False,
     'ffmpeg_source': None,
+    'ffmpeg_path': None, # Stocker le chemin trouvé
     'ffmpeg_installation_tried': False,
     'download_history': [],
     'dependencies_checked': False,
-    'debug_mode': False  # Nouveau paramètre pour le débogage
+    'debug_mode': False
 }
 
 for key, value in session_defaults.items():
@@ -39,51 +41,56 @@ for key, value in session_defaults.items():
         st.session_state[key] = value
 
 # --- Système et Dépendances ---
-def get_system_info():
-    """Récupère les informations système"""
-    return {
-        "platform": platform.system(),
-        "python_version": platform.python_version(),
-        "architecture": platform.architecture()[0]
-    }
 
-def check_ffmpeg():
-    """Vérification complète de FFmpeg"""
-    # Méthode 1: ffmpeg système
-    try:
-        result = subprocess.run(['ffmpeg', '-version'], 
-                              capture_output=True, text=True, timeout=5)
-        if result.returncode == 0:
-            return True, "Système"
-    except:
-        pass
-    
-    # Méthode 2: ffmpeg-python
-    try:
-        import ffmpeg
-        # Test si ffmpeg est fonctionnel
-        try:
-            subprocess.run(['ffmpeg', '-version'], capture_output=True, timeout=5)
-            return True, "ffmpeg-python"
-        except:
-            return True, "ffmpeg-python (limité)"
-    except ImportError:
-        pass
-    
-    # Méthode 3: imageio-ffmpeg
+def get_ffmpeg_path():
+    """
+    Tente de trouver le chemin de l'exécutable FFmpeg requis par yt-dlp.
+    1. Cherche dans le PATH du système.
+    2. Cherche via imageio-ffmpeg (qui peut inclure les binaires).
+    Retourne le chemin ou None si non trouvé.
+    """
+    # Méthode 1: Chercher dans le PATH du système avec shutil.which()
+    ffmpeg_path = shutil.which('ffmpeg')
+    if ffmpeg_path and os.path.exists(ffmpeg_path):
+        return ffmpeg_path
+
+    # Méthode 2: Utiliser imageio-ffmpeg qui peut embarquer les binaires
     try:
         import imageio_ffmpeg
-        return True, "imageio-ffmpeg"
+        ffmpeg_path = imageio_ffmpeg.get_ffmpeg_exe()
+        if ffmpeg_path and os.path.exists(ffmpeg_path):
+            return ffmpeg_path
     except ImportError:
         pass
+    except Exception:
+        pass # Ignore les autres erreurs
+
+    return None
+
+def check_ffmpeg_status():
+    """Vérifie l'état de FFmpeg pour yt-dlp et met à jour le session_state."""
+    ffmpeg_path = get_ffmpeg_path()
     
-    return False, None
+    if ffmpeg_path:
+        st.session_state.ffmpeg_available = True
+        st.session_state.ffmpeg_path = ffmpeg_path
+        # Déterminer la source pour l'affichage
+        if "imageio" in ffmpeg_path.lower():
+            st.session_state.ffmpeg_source = "imageio-ffmpeg (bundlé)"
+        else:
+            st.session_state.ffmpeg_source = "Système"
+        return True
+    else:
+        st.session_state.ffmpeg_available = False
+        st.session_state.ffmpeg_path = None
+        st.session_state.ffmpeg_source = None
+        return False
 
 def install_ffmpeg_complete():
-    """Installation complète de FFmpeg avec multiples méthodes"""
+    """Installation de FFmpeg via imageio-ffmpeg qui inclut les binaires."""
     methods = [
-        {"name": "ffmpeg-python", "command": [sys.executable, "-m", "pip", "install", "ffmpeg-python"]},
         {"name": "imageio-ffmpeg", "command": [sys.executable, "-m", "pip", "install", "imageio-ffmpeg"]},
+        {"name": "ffmpeg-python", "command": [sys.executable, "-m", "pip", "install", "ffmpeg-python"]},
     ]
     
     progress_bar = st.sidebar.progress(0)
@@ -106,11 +113,8 @@ def install_ffmpeg_complete():
             status_text.text(f"✅ {method['name']} installé!")
             time.sleep(1)
             
-            # Vérifier si ça marche
-            available, source = check_ffmpeg()
-            if available:
-                st.session_state.ffmpeg_available = True
-                st.session_state.ffmpeg_source = source
+            # Vérifier si l'exécutable est maintenant trouvé
+            if check_ffmpeg_status():
                 st.session_state.ffmpeg_installation_tried = True
                 progress_bar.progress(1.0)
                 status_text.text("🎉 FFmpeg est maintenant opérationnel!")
@@ -276,7 +280,6 @@ def validate_youtube_url(url):
     """Validation améliorée des URLs YouTube"""
     if not url:
         return False
-    
     youtube_regex = (
         r'(https?://)?(www\.)?'
         '(youtube|youtu|youtube-nocookie)\.(com|be)/'
@@ -348,13 +351,11 @@ def search_youtube(query, limit=15):
             st.warning("⚠️ Recherche vide, utilisation des résultats de démonstration")
             return get_demo_results("exemple")
         
-        # Vérifier si yt-dlp est disponible
         yt_dlp_available, yt_dlp_version = check_yt_dlp()
         if not yt_dlp_available:
             st.error("❌ yt-dlp n'est pas disponible. Installation requise.")
             return get_demo_results(query)
         
-        # Commande de recherche améliorée
         search_command = [
             'yt-dlp',
             f'ytsearch{limit}:{clean_query}',
@@ -367,7 +368,6 @@ def search_youtube(query, limit=15):
             '--fragment-retries', '3'
         ]
         
-        # Journalisation pour le débogage
         if st.session_state.debug_mode:
             st.markdown(f"""
             <div class='debug-box'>
@@ -382,7 +382,6 @@ def search_youtube(query, limit=15):
             timeout=60
         )
         
-        # Journalisation pour le débogage
         if st.session_state.debug_mode:
             st.markdown(f"""
             <div class='debug-box'>
@@ -392,21 +391,12 @@ def search_youtube(query, limit=15):
             </div>
             """, unsafe_allow_html=True)
         
-        # Vérifier si la commande a réussi
         if result.returncode != 0:
             st.error(f"❌ Erreur lors de la recherche: {result.stderr}")
             return get_demo_results(query)
         
-        # Traiter les résultats
         videos = []
         output_lines = result.stdout.splitlines()
-        
-        if st.session_state.debug_mode:
-            st.markdown(f"""
-            <div class='debug-box'>
-            Nombre de lignes retournées: {len(output_lines)}
-            </div>
-            """, unsafe_allow_html=True)
         
         for line in output_lines:
             if line.strip():
@@ -428,14 +418,7 @@ def search_youtube(query, limit=15):
                         'upload_date': video_data.get('upload_date', ''),
                         'description': video_data.get('description', '')[:200] + '...' if video_data.get('description') else ''
                     })
-                except json.JSONDecodeError as e:
-                    if st.session_state.debug_mode:
-                        st.markdown(f"""
-                        <div class='debug-box'>
-                        Erreur de décodage JSON: {str(e)}
-                        Ligne: {line[:100] if line else "Vide"}
-                        </div>
-                        """, unsafe_allow_html=True)
+                except json.JSONDecodeError:
                     continue
         
         if videos:
@@ -529,11 +512,21 @@ def download_media(url, format_choice):
         clean_url = clean_youtube_url(url)
         temp_dir = tempfile.mkdtemp()
         
-        # Vérifier FFmpeg à nouveau
-        ffmpeg_available, ffmpeg_source = check_ffmpeg()
-        st.session_state.ffmpeg_available = ffmpeg_available
-        st.session_state.ffmpeg_source = ffmpeg_source
-        
+        # Vérifier le chemin de FFmpeg AVANT de lancer le téléchargement
+        ffmpeg_path = get_ffmpeg_path()
+        if not ffmpeg_path:
+            st.error("❌ Erreur Critique: FFmpeg introuvable.")
+            st.error("yt-dlp a besoin des programmes 'ffmpeg' et 'ffprobe' pour convertir les fichiers.")
+            st.markdown("""
+            **Solution:**
+            1.  Installez FFmpeg sur votre système (recommandé) :
+                - **Windows**: `choco install ffmpeg` ou téléchargez depuis [ffmpeg.org](https://ffmpeg.org/download.html) et ajoutez au PATH.
+                - **macOS**: `brew install ffmpeg`
+                - **Linux**: `sudo apt install ffmpeg` (Ubuntu/Debian) ou `sudo dnf install ffmpeg` (Fedora)
+            2.  Redémarrez cette application après l'installation.
+            """)
+            return None, None, None
+
         st.info("🔄 Configuration du téléchargement...")
         
         if format_choice == "MP4 (Vidéo)":
@@ -544,43 +537,29 @@ def download_media(url, format_choice):
                 '--merge-output-format', 'mp4',
                 '--ignore-errors',
                 '--no-warnings',
-                '-o', output_template, 
+                '-o', output_template,
+                '--ffmpeg-location', ffmpeg_path,  # <-- CORRECTION CRUCIALE
                 clean_url
             ]
         else:  # MP3
             output_template = os.path.join(temp_dir, "%(title).100s.%(ext)s")
-            
-            if ffmpeg_available:
-                # AVEC FFMPEG - Vraie conversion MP3
-                command = [
-                    'yt-dlp',
-                    '-x', '--audio-format', 'mp3',
-                    '--audio-quality', '192K',  # Qualité haute
-                    '--ignore-errors',
-                    '--no-warnings',
-                    '-o', output_template,
-                    clean_url
-                ]
-                st.success(f"🎵 Conversion MP3 avec FFmpeg ({ffmpeg_source}) activée!")
-            else:
-                # SANS FFMPEG - Fallback
-                st.warning("⚠️ FFmpeg non disponible - Format audio natif")
-                command = [
-                    'yt-dlp',
-                    '-x',
-                    '--ignore-errors',
-                    '--no-warnings',
-                    '-o', output_template,
-                    clean_url
-                ]
+            command = [
+                'yt-dlp',
+                '-x', '--audio-format', 'mp3',
+                '--audio-quality', '192K',
+                '--ignore-errors',
+                '--no-warnings',
+                '-o', output_template,
+                '--ffmpeg-location', ffmpeg_path, # <-- CORRECTION CRUCIALE
+                clean_url
+            ]
+            st.success(f"🎵 Conversion MP3 avec FFmpeg activée!")
         
         st.info("📥 Téléchargement en cours...")
         
-        # Barre de progression
         progress_bar = st.progress(0)
         status_text = st.empty()
         
-        # Exécution avec mise à jour de progression
         process = subprocess.Popen(
             command, 
             stdout=subprocess.PIPE, 
@@ -594,13 +573,12 @@ def download_media(url, format_choice):
             if output == '' and process.poll() is not None:
                 break
             if output:
-                # Simple progression basique
                 if '[download]' in output:
-                    progress = min(0.9, float(st.session_state.get('download_progress', 0)) + 0.1)
+                    # Progression basique
+                    progress = min(0.9, float(st.session_state.get('download_progress', 0)) + 0.05)
                     progress_bar.progress(progress)
                     st.session_state.download_progress = progress
         
-        # Récupérer le résultat final
         process.wait()
         
         if process.returncode == 0:
@@ -610,11 +588,9 @@ def download_media(url, format_choice):
             progress_bar.empty()
             status_text.empty()
             
-            # Recherche du fichier
             downloaded_file = None
             for file in os.listdir(temp_dir):
                 file_lower = file.lower()
-                
                 if format_choice == "MP4 (Vidéo)":
                     if file_lower.endswith(('.mp4', '.webm', '.mkv')):
                         downloaded_file = os.path.join(temp_dir, file)
@@ -626,25 +602,22 @@ def download_media(url, format_choice):
                         break
                 else:  # MP3
                     if file_lower.endswith('.mp3'):
-                        # Vrai MP3 avec FFmpeg
                         downloaded_file = os.path.join(temp_dir, file)
                         mime_type = "audio/mpeg"
-                        st.success("🎵 Fichier MP3 converti avec FFmpeg!")
+                        st.success("🎵 Fichier MP3 converti avec succès!")
                         break
                     elif file_lower.endswith(('.m4a', '.ogg', '.opus', '.wav')):
-                        # Format natif sans FFmpeg
                         downloaded_file = os.path.join(temp_dir, file)
                         new_file = os.path.splitext(downloaded_file)[0] + '.mp3'
                         os.rename(downloaded_file, new_file)
                         downloaded_file = new_file
                         mime_type = "audio/mpeg"
-                        st.warning("🔸 Fichier audio natif renommé (pas de conversion FFmpeg)")
+                        st.warning("🔸 Fichier audio natif renommé.")
                         break
             
             if downloaded_file:
                 file_name = os.path.basename(downloaded_file)
                 
-                # Ajouter à l'historique
                 history_entry = {
                     'title': st.session_state.selected_video_data.get('title', 'Inconnu'),
                     'format': format_choice,
@@ -669,7 +642,6 @@ def download_media(url, format_choice):
         st.error(f"❌ Erreur: {str(e)}")
         return None, None, None
     finally:
-        # Nettoyage
         if 'progress_bar' in locals():
             progress_bar.empty()
         if 'status_text' in locals():
@@ -721,9 +693,7 @@ def render_pagination():
 def display_video_card(video, index):
     """Affiche une carte vidéo stylisée"""
     with st.container():
-        st.markdown(f"""
-        <div class='video-card'>
-        """, unsafe_allow_html=True)
+        st.markdown(f"<div class='video-card'>", unsafe_allow_html=True)
         
         col_img, col_info, col_button = st.columns([1, 3, 1])
         with col_img:
@@ -766,7 +736,7 @@ def display_download_history():
 # Vérification initiale des dépendances
 if not st.session_state.dependencies_checked:
     with st.spinner("Vérification des dépendances..."):
-        st.session_state.ffmpeg_available, st.session_state.ffmpeg_source = check_ffmpeg()
+        check_ffmpeg_status()
         st.session_state.dependencies_checked = True
 
 # Configuration du thème
@@ -788,21 +758,21 @@ st.sidebar.title("🎛️ Panneau de Contrôle")
 # État des dépendances
 st.sidebar.subheader("📊 État du Système")
 
-# FFmpeg Status
+# FFmpeg Status (utilise la nouvelle fonction de vérification)
 ffmpeg_status = st.session_state.ffmpeg_available
-status_class = "status-online" if ffmpeg_status else "status-warning"
-status_text = "✅ Opérationnel" if ffmpeg_status else "⚠️ Requis"
+status_class = "status-online" if ffmpeg_status else "status-offline" # Changé à 'offline' car c'est critique
+status_text = f"✅ {st.session_state.ffmpeg_source}" if ffmpeg_status else "❌ Introuvable"
 
 st.sidebar.markdown(f"""
-<div class='success-box' if ffmpeg_status else 'warning-box'>
+<div class='success-box' if ffmpeg_status else 'error-box'>
 <span class='status-indicator {status_class}'></span>
 <strong>FFmpeg: {status_text}</strong><br>
-{f"Source: {st.session_state.ffmpeg_source}" if st.session_state.ffmpeg_source else "Non installé"}
+{f"Chemin: {st.session_state.ffmpeg_path}" if st.session_state.ffmpeg_path else "yt-dlp ne peut pas fonctionner sans FFmpeg."}
 </div>
 """, unsafe_allow_html=True)
 
 if not st.session_state.ffmpeg_available and not st.session_state.ffmpeg_installation_tried:
-    if st.sidebar.button("🚀 Installer FFmpeg Automatiquement", use_container_width=True):
+    if st.sidebar.button("🚀 Tenter d'installer FFmpeg (imageio-ffmpeg)", use_container_width=True):
         with st.sidebar:
             with st.spinner("Installation en cours..."):
                 if install_ffmpeg_complete():
@@ -843,9 +813,9 @@ download_format = st.sidebar.selectbox("Format de sortie:", ["MP4 (Vidéo)", "MP
 # Avertissement MP3 sans FFmpeg
 if download_format == "MP3 (Audio)" and not st.session_state.ffmpeg_available:
     st.sidebar.markdown("""
-    <div class='warning-box'>
-    <strong>⚠️ MP3 Limité</strong><br>
-    Sans FFmpeg: format natif renommé
+    <div class='error-box'>
+    <strong>❌ MP3 Impossible</strong><br>
+    FFmpeg est requis pour la conversion audio.
     </div>
     """, unsafe_allow_html=True)
 
@@ -870,7 +840,6 @@ if direct_url and validate_youtube_url(direct_url):
 if st.sidebar.button("🚀 Lancer la recherche", use_container_width=True):
     if search_query.strip():
         with st.spinner("Recherche en cours..."):
-            # Vider le cache pour forcer une nouvelle recherche
             if 'search_youtube' in st.session_state:
                 del st.session_state['search_youtube']
             
@@ -889,10 +858,8 @@ if st.sidebar.button("🚀 Lancer la recherche", use_container_width=True):
         st.sidebar.warning("⚠️ Entrez un terme de recherche")
 
 # Zone principale
-# Historique des téléchargements
 display_download_history()
 
-# Affichage des résultats de recherche
 if st.session_state.search_results:
     st.subheader("📺 Résultats de recherche")
     results_per_page = 3
@@ -905,7 +872,6 @@ if st.session_state.search_results:
     
     render_pagination()
 
-# Vidéo sélectionnée
 if st.session_state.selected_video_url and st.session_state.selected_video_data:
     st.subheader("🎬 Vidéo Sélectionnée")
     display_metadata(st.session_state.selected_video_data)
@@ -915,17 +881,14 @@ if st.session_state.selected_video_url and st.session_state.selected_video_data:
         embed_url = f"https://www.youtube.com/embed/{video_id}"
         st.components.v1.iframe(embed_url, height=400)
         
-        # Avertissement spécifique pour MP3
-        if download_format == "MP3 (Audio)" and not st.session_state.ffmpeg_available:
-            st.warning("""
-            **⚠️ Conversion MP3 limitée:** 
-            Sans FFmpeg, le fichier sera un format audio natif (généralement m4a) renommé en .mp3.
-            Pour une vraie conversion MP3, installez FFmpeg.
-            """)
-        
         col1, col2 = st.columns(2)
         with col1:
-            if st.button("⬇️ Télécharger", use_container_width=True):
+            # Désactiver le bouton si FFmpeg n'est pas disponible pour le MP3
+            is_download_disabled = (download_format == "MP3 (Audio)" and not st.session_state.ffmpeg_available)
+            if is_download_disabled:
+                st.warning("Le téléchargement MP3 est désactivé car FFmpeg est requis.")
+            
+            if st.button("⬇️ Télécharger", use_container_width=True, disabled=is_download_disabled):
                 with st.spinner("Téléchargement en cours..."):
                     file_path, file_name, mime_type = download_media(
                         st.session_state.selected_video_url, 
@@ -934,7 +897,6 @@ if st.session_state.selected_video_url and st.session_state.selected_video_data:
                     if file_path:
                         st.success(f"✅ {file_name} prêt!")
                         
-                        # Afficher le bouton de téléchargement
                         with open(file_path, "rb") as f:
                             bytes_data = f.read()
                         
@@ -946,7 +908,6 @@ if st.session_state.selected_video_url and st.session_state.selected_video_data:
                             use_container_width=True
                         )
                         
-                        # Nettoyage des fichiers temporaires
                         try:
                             if os.path.exists(file_path):
                                 os.unlink(file_path)
@@ -966,9 +927,9 @@ elif not st.session_state.search_results:
 
 # Footer avec instructions
 st.sidebar.markdown("---")
-with st.sidebar.expander("📚 Guide d'Installation"):
+with st.sidebar.expander("📚 Guide d'Installation FFmpeg"):
     st.markdown("""
-    **Installation FFmpeg Manuelle:**
+    **Pour une installation complète de FFmpeg (recommandé):**
     
     ```bash
     # Windows (avec Chocolatey):
@@ -979,23 +940,18 @@ with st.sidebar.expander("📚 Guide d'Installation"):
     
     # Mac (avec Homebrew):
     brew install ffmpeg
-    
-    # Python (recommandé):
-    pip install ffmpeg-python
     ```
     
-    **Redémarrez l'application après installation.**
+    **L'installation automatique via le bouton ci-dessus installe `imageio-ffmpeg`, qui peut fonctionner, mais l'installation système est plus robuste.**
     
-    **Actuellement:** 
-    - ✅ MP4: Toujours fonctionnel
-    - ⚠️ MP3: Limité sans FFmpeg
+    **Redémarrez l'application après installation.**
     """)
 
 # Pied de page
 st.markdown("---")
 st.markdown("""
 <div style='text-align: center; color: #666; padding: 20px;'>
-<p>🦾 CYBER-STREAM Terminal v2.0 | Powered by yt-dlp & FFmpeg</p>
+<p>🦾 CYBER-STREAM Terminal v2.1 | Powered by yt-dlp & FFmpeg</p>
 <p>⚡ Téléchargement haute vitesse | 🎵 Conversion audio | 📺 Vidéo HD</p>
 </div>
 """, unsafe_allow_html=True)

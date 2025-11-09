@@ -9,6 +9,7 @@ import time
 import random
 import math
 import json
+import re
 
 # --- Configuration de la page ---
 st.set_page_config(
@@ -19,22 +20,22 @@ st.set_page_config(
 )
 
 # --- Initialisation de l'état de session ---
-if 'title_typed' not in st.session_state:
-    st.session_state.title_typed = False
-if 'hack_mode' not in st.session_state:
-    st.session_state.hack_mode = False
-if 'search_results' not in st.session_state:
-    st.session_state.search_results = None
-if 'selected_video_url' not in st.session_state:
-    st.session_state.selected_video_url = None
-if 'selected_video_data' not in st.session_state:
-    st.session_state.selected_video_data = None
-if 'current_page' not in st.session_state:
-    st.session_state.current_page = 1
-if 'total_pages' not in st.session_state:
-    st.session_state.total_pages = 0
+session_defaults = {
+    'title_typed': False,
+    'hack_mode': False,
+    'search_results': None,
+    'selected_video_url': None,
+    'selected_video_data': None,
+    'current_page': 1,
+    'total_pages': 0,
+    'download_in_progress': False
+}
 
-# --- Fonction pour charger le CSS (identique) ---
+for key, value in session_defaults.items():
+    if key not in st.session_state:
+        st.session_state[key] = value
+
+# --- Fonction pour charger le CSS ---
 def load_css(theme_name):
     if theme_name == "Cyberpunk":
         cyberpunk_css = """
@@ -74,6 +75,11 @@ def load_css(theme_name):
             .custom-spinner div:nth-child(2) { animation-delay: -0.16s; }
             @keyframes pulse { 0%, 80%, 100% { transform: scale(0); opacity: 0.5; } 40% { transform: scale(1); opacity: 1; } }
             iframe { border: 1px solid rgba(0, 255, 255, 0.5); box-shadow: 0 0 30px rgba(0, 255, 255, 0.4); border-radius: 10px; }
+            .status-info { background: rgba(0, 255, 255, 0.1); border: 1px solid #00ffff; padding: 10px; border-radius: 5px; margin: 10px 0; }
+            .status-success { background: rgba(0, 255, 0, 0.1); border: 1px solid #00ff00; padding: 10px; border-radius: 5px; margin: 10px 0; }
+            .status-error { background: rgba(255, 0, 0, 0.1); border: 1px solid #ff0000; padding: 10px; border-radius: 5px; margin: 10px 0; }
+            .download-progress { width: 100%; background: rgba(255, 255, 255, 0.1); border-radius: 10px; margin: 10px 0; }
+            .download-progress-bar { height: 10px; background: linear-gradient(90deg, #00ffff, #ff00ff); border-radius: 10px; transition: width 0.3s ease; }
         </style>
         """
         st.markdown(cyberpunk_css, unsafe_allow_html=True)
@@ -83,25 +89,63 @@ def load_css(theme_name):
 
 # --- Fonctions Utilitaires ---
 
+def validate_youtube_url(url):
+    """Valide l'URL YouTube"""
+    youtube_regex = (
+        r'(https?://)?(www\.)?'
+        '(youtube|youtu|youtube-nocookie)\.(com|be)/'
+        '(watch\?v=|embed/|v/|.+\?v=)?([^&=%\?]{11})')
+    return re.match(youtube_regex, url) is not None
+
 def get_video_id(url):
-    if "youtu.be/" in url: return url.split("youtu.be/")[1].split("?")[0]
-    if "watch?v=" in url: return url.split("watch?v=")[1].split("&")[0]
+    """Extrait l'ID de la vidéo YouTube"""
+    if not url:
+        return None
+    if "youtu.be/" in url: 
+        return url.split("youtu.be/")[1].split("?")[0]
+    if "watch?v=" in url: 
+        return url.split("watch?v=")[1].split("&")[0]
+    if "embed/" in url:
+        return url.split("embed/")[1].split("?")[0]
     return None
 
 def display_custom_status(message, status_type="info"):
-    st.markdown(f'<div class="custom-status {status_type}">{message}</div>', unsafe_allow_html=True)
+    """Affiche un message de statut stylisé"""
+    st.markdown(f'<div class="status-{status_type}">{message}</div>', unsafe_allow_html=True)
 
 def get_nested_data(data, primary_key, secondary_key, default):
+    """Récupère les données imbriquées de manière sécurisée"""
+    if not data:
+        return default
     primary_data = data.get(primary_key)
-    if isinstance(primary_data, dict): return primary_data.get(secondary_key, default)
-    elif primary_data: return primary_data
-    else: return default
+    if isinstance(primary_data, dict): 
+        return primary_data.get(secondary_key, default)
+    elif primary_data: 
+        return primary_data
+    else: 
+        return default
+
+def format_duration(seconds):
+    """Formate la durée en secondes vers un format lisible"""
+    try:
+        seconds = int(seconds)
+        hours = seconds // 3600
+        minutes = (seconds % 3600) // 60
+        secs = seconds % 60
+        if hours > 0:
+            return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+        else:
+            return f"{minutes:02d}:{secs:02d}"
+    except:
+        return "N/A"
 
 def display_metadata(video_data):
+    """Affiche les métadonnées de la vidéo"""
     col1, col2 = st.columns([1, 3])
     with col1:
         thumbnail_list = video_data.get('thumbnail', [])
-        if thumbnail_list: st.image(thumbnail_list[0]['url'], width=200)
+        if thumbnail_list: 
+            st.image(thumbnail_list[0]['url'], width=200)
     with col2:
         title = video_data.get('title', 'Titre non disponible')
         channel_name = get_nested_data(video_data, 'channel', 'name', 'Chaîne inconnue')
@@ -110,8 +154,6 @@ def display_metadata(video_data):
         st.markdown(f"<div class='metadata-card-text'><h3>{title}</h3><p>Chaîne : {channel_name}</p><p>Vues : {view_text} | Durée : {duration_text}</p></div>", unsafe_allow_html=True)
 
 # --- FONCTION DE RECHERCHE AVEC YT-DLP ET CACHE ---
-# @st.cache_data mémorise les résultats pour éviter de re-lancer la recherche à chaque fois.
-# Le cache expire après 1 heure (3600 secondes).
 @st.cache_data(ttl=3600, show_spinner="Recherche sur YouTube... Veuillez patienter.")
 def search_youtube(query, limit=30):
     """
@@ -123,29 +165,38 @@ def search_youtube(query, limit=30):
             'yt-dlp',
             f'ytsearch{limit}:{query}',
             '--dump-json',
-            '--no-download'
+            '--no-download',
+            '--no-warnings'
         ]
-        result = subprocess.run(search_command, capture_output=True, text=True, check=True)
+        
+        result = subprocess.run(search_command, capture_output=True, text=True, check=True, timeout=30)
         
         videos = []
         for line in result.stdout.splitlines():
-            if line:
-                video_data = json.loads(line)
-                videos.append({
-                    'id': video_data.get('id'),
-                    'title': video_data.get('title'),
-                    'link': video_data.get('webpage_url'),
-                    'channel': {'name': video_data.get('uploader')},
-                    'duration': {'text': str(video_data.get('duration', 0))},
-                    'viewCount': {'text': f"{video_data.get('view_count', 0):,}"},
-                    'thumbnail': [{'url': video_data.get('thumbnail')}]
-                })
+            if line.strip():
+                try:
+                    video_data = json.loads(line)
+                    # Formater la durée si elle est en secondes
+                    duration = video_data.get('duration')
+                    duration_text = format_duration(duration) if duration else 'N/A'
+                    
+                    videos.append({
+                        'id': video_data.get('id'),
+                        'title': video_data.get('title'),
+                        'link': video_data.get('webpage_url'),
+                        'channel': {'name': video_data.get('uploader')},
+                        'duration': {'text': duration_text},
+                        'viewCount': {'text': f"{video_data.get('view_count', 0):,}"},
+                        'thumbnail': [{'url': video_data.get('thumbnail')}]
+                    })
+                except json.JSONDecodeError:
+                    continue
         return videos
+    except subprocess.TimeoutExpired:
+        st.error("La recherche a pris trop de temps. Veuillez réessayer.")
+        return []
     except subprocess.CalledProcessError as e:
         st.error(f"Erreur lors de la recherche avec yt-dlp : {e.stderr}")
-        return []
-    except json.JSONDecodeError:
-        st.error("Erreur lors du décodage des résultats de la recherche.")
         return []
     except Exception as e:
         st.error(f"Une erreur inattendue est survenue lors de la recherche : {e}")
@@ -153,46 +204,92 @@ def search_youtube(query, limit=30):
 
 # --- FONCTION DE TÉLÉCHARGEMENT AVEC YT-DLP ---
 def download_media(url, format_choice):
+    """Télécharge le média avec yt-dlp avec gestion de progression"""
+    if st.session_state.download_in_progress:
+        display_custom_status("Un téléchargement est déjà en cours.", "error")
+        return None, None, None
+        
+    st.session_state.download_in_progress = True
+    
     try:
         spinner_placeholder = st.empty()
+        progress_bar = st.progress(0)
+        status_placeholder = st.empty()
+        
         spinner_placeholder.markdown('<div class="custom-spinner"><div></div><div></div><div></div></div>', unsafe_allow_html=True)
+        status_placeholder.markdown('<div class="status-info">CONNEXION AU SERVEUR YOUTUBE...</div>', unsafe_allow_html=True)
+        
         temp_dir = tempfile.mkdtemp()
-        display_custom_status(f"CONNEXION AU SERVEUR YOUTUBE AVEC YT-DLP...", "info")
-        spinner_placeholder.empty()
+        
         if format_choice == "MP4 (Vidéo)":
             output_path = os.path.join(temp_dir, "video.%(ext)s")
-            command = ['yt-dlp', '-f', 'bv[ext=mp4]+ba[ext=m4a]/b[ext=mp4]', '-o', output_path, url]
-            subprocess.run(command, check=True, capture_output=True, text=True)
-            downloaded_file = None
-            for file in os.listdir(temp_dir):
-                if file.startswith("video."):
-                    downloaded_file = os.path.join(temp_dir, file); break
-            if downloaded_file: return downloaded_file, os.path.basename(downloaded_file), "video/mp4"
-            else: raise Exception("Le fichier vidéo n'a pas pu être trouvé.")
+            command = [
+                'yt-dlp', 
+                '-f', 'best[ext=mp4]/best',
+                '--merge-output-format', 'mp4',
+                '-o', output_path, 
+                url
+            ]
         elif format_choice == "MP3 (Audio)":
             output_path = os.path.join(temp_dir, "audio.%(ext)s")
-            command = ['yt-dlp', '-x', '--audio-format', 'mp3', '--audio-quality', '0', '-o', output_path, url]
-            subprocess.run(command, check=True, capture_output=True, text=True)
-            downloaded_file = None
-            for file in os.listdir(temp_dir):
-                if file.startswith("audio."):
-                    downloaded_file = os.path.join(temp_dir, file); break
-            if downloaded_file: return downloaded_file, os.path.basename(downloaded_file), "audio/mpeg"
-            else: raise Exception("Le fichier audio n'a pas pu être trouvé.")
-    except subprocess.CalledProcessError as e: display_custom_status(f"ERREUR YT-DLP : {e.stderr}", "error"); return None, None, None
-    except Exception as e: display_custom_status(f"ERREUR DE TÉLÉCHARGEMENT : {e}", "error"); return None, None, None
+            command = [
+                'yt-dlp',
+                '-x',
+                '--audio-format', 'mp3',
+                '--audio-quality', '0',
+                '-o', output_path,
+                url
+            ]
+        
+        status_placeholder.markdown('<div class="status-info">TÉLÉCHARGEMENT EN COURS...</div>', unsafe_allow_html=True)
+        
+        # Exécution du téléchargement
+        process = subprocess.run(command, capture_output=True, text=True, check=True)
+        
+        progress_bar.progress(100)
+        status_placeholder.markdown('<div class="status-success">TÉLÉCHARGEMENT TERMINÉ!</div>', unsafe_allow_html=True)
+        spinner_placeholder.empty()
+        
+        # Recherche du fichier téléchargé
+        downloaded_file = None
+        for file in os.listdir(temp_dir):
+            if file.startswith("video.") or file.startswith("audio."):
+                downloaded_file = os.path.join(temp_dir, file)
+                break
+        
+        if downloaded_file:
+            mime_type = "video/mp4" if format_choice == "MP4 (Vidéo)" else "audio/mpeg"
+            return downloaded_file, os.path.basename(downloaded_file), mime_type
+        else:
+            raise Exception("Fichier téléchargé non trouvé.")
+            
+    except subprocess.CalledProcessError as e:
+        display_custom_status(f"ERREUR YT-DLP : {e.stderr}", "error")
+        return None, None, None
+    except Exception as e:
+        display_custom_status(f"ERREUR DE TÉLÉCHARGEMENT : {e}", "error")
+        return None, None, None
+    finally:
+        st.session_state.download_in_progress = False
+        progress_bar.empty()
+        status_placeholder.empty()
 
 def render_pagination():
-    if st.session_state.total_pages <= 1: return
+    """Affiche la pagination"""
+    if st.session_state.total_pages <= 1:
+        return
+        
     col_prev, col_info, col_next = st.columns([1, 2, 1])
     with col_prev:
         if st.button("⬅️ Précédent", disabled=(st.session_state.current_page == 1)):
-            st.session_state.current_page -= 1; st.rerun()
+            st.session_state.current_page -= 1
+            st.rerun()
     with col_info:
         st.markdown(f"<div class='pagination-info'>Page {st.session_state.current_page} / {st.session_state.total_pages}</div>", unsafe_allow_html=True)
     with col_next:
         if st.button("Suivant ➡️", disabled=(st.session_state.current_page == st.session_state.total_pages)):
-            st.session_state.current_page += 1; st.rerun()
+            st.session_state.current_page += 1
+            st.rerun()
 
 # --- Interface Utilisateur ---
 
@@ -201,7 +298,7 @@ load_css(theme)
 
 if not st.session_state.title_typed:
     st.markdown('<h1 class="typing-title">CYBER-STREAM TERMINAL</h1>', unsafe_allow_html=True)
-    time.sleep(3.5)
+    time.sleep(2)
     st.session_state.title_typed = True
     st.rerun()
 else:
@@ -211,17 +308,42 @@ st.sidebar.title("🎛️ Panneau de Contrôle")
 search_query = st.sidebar.text_input("🔍 Rechercher des vidéos :", key="search_input")
 download_format = st.sidebar.selectbox("Format de Téléchargement", ["MP4 (Vidéo)", "MP3 (Audio)"])
 
+# Section pour URL directe
+st.sidebar.markdown("---")
+direct_url = st.sidebar.text_input("🌐 Ou coller une URL YouTube directe:")
+
+if direct_url and validate_youtube_url(direct_url):
+    try:
+        yt = YouTube(direct_url)
+        video_data = {
+            'id': get_video_id(direct_url),
+            'title': yt.title,
+            'link': direct_url,
+            'channel': {'name': yt.author},
+            'duration': {'text': format_duration(yt.length)},
+            'viewCount': {'text': f"{yt.views:,}"},
+            'thumbnail': [{'url': yt.thumbnail_url}]
+        }
+        st.session_state.selected_video_url = direct_url
+        st.session_state.selected_video_data = video_data
+        st.sidebar.success("Vidéo chargée avec succès!")
+    except Exception as e:
+        st.sidebar.error(f"Erreur lors du chargement de la vidéo: {e}")
+
 if st.sidebar.button("Lancer la recherche") and search_query:
-    # La fonction search_youtube est maintenant appelée ici.
-    # Si la recherche est nouvelle, elle prendra du temps.
-    # Si elle est dans le cache, le résultat sera instantané.
-    results = search_youtube(search_query, limit=30)
-    st.session_state.search_results = results
-    st.session_state.total_pages = math.ceil(len(results) / 3)
-    st.session_state.current_page = 1
-    st.session_state.selected_video_url = None
-    st.session_state.selected_video_data = None
-    st.rerun()
+    if search_query.strip():
+        with st.spinner("Recherche en cours..."):
+            results = search_youtube(search_query, limit=30)
+            st.session_state.search_results = results
+            st.session_state.total_pages = max(1, math.ceil(len(results) / 3))
+            st.session_state.current_page = 1
+            st.session_state.selected_video_url = None
+            st.session_state.selected_video_data = None
+            
+        if not results:
+            st.sidebar.warning("Aucun résultat trouvé. Essayez avec d'autres termes.")
+    else:
+        st.sidebar.warning("Veuillez entrer un terme de recherche.")
 
 if st.sidebar.button("🚨 ACTIVER HACK MODE 🚨"):
     st.session_state.hack_mode = not st.session_state.hack_mode
@@ -230,48 +352,93 @@ if st.session_state.hack_mode:
     st.markdown("""<div style='position: fixed; top:0; left:0; width:100%; height:100%; pointer-events:none; z-index:9999; overflow:hidden;'><style>.matrix-rain { color: #0F0; font-size: 1.2em; position: absolute; animation: rain 1s linear infinite; }@keyframes rain { to { transform: translateY(100vh); } }</style><script>const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ123456789@#$%^&*()*&^%+-/~{[|`]}';const matrixContainer = document.currentScript.parentElement;for(let i = 0; i < 50; i++) {const span = document.createElement('span');span.classList.add('matrix-rain');span.style.left = Math.random() * 100 + '%';span.style.animationDuration = Math.random() * 2 + 1 + 's';span.style.animationDelay = Math.random() * 2 + 's';span.innerText = chars.charAt(Math.floor(Math.random() * chars.length));matrixContainer.appendChild(span);}setTimeout(() => matrixContainer.remove(), 3000);</script></div>""", unsafe_allow_html=True)
     st.session_state.hack_mode = False
 
+# Affichage des résultats de recherche
 if st.session_state.search_results:
-    st.subheader("Résultats de la recherche")
+    st.subheader("📺 Résultats de la recherche")
     results_per_page = 3
     start_index = (st.session_state.current_page - 1) * results_per_page
     end_index = start_index + results_per_page
     page_results = st.session_state.search_results[start_index:end_index]
-    for video in page_results:
-        if video.get('link') and video.get('title'):
-            with st.container():
-                col_img, col_info, col_button = st.columns([1, 3, 1])
-                with col_img:
-                    thumbnail_list = video.get('thumbnail', [])
-                    if thumbnail_list: st.image(thumbnail_list[0]['url'], width=120)
-                with col_info:
-                    title = video.get('title', 'Titre non disponible')
-                    channel_name = get_nested_data(video, 'channel', 'name', 'Chaîne inconnue')
-                    view_text = get_nested_data(video, 'viewCount', 'text', 'N/A vues')
-                    duration_text = get_nested_data(video, 'duration', 'text', 'N/A')
-                    st.markdown(f"**{title}**")
-                    st.caption(f"{channel_name} | {view_text} | {duration_text}")
-                with col_button:
-                    if st.button("Sélectionner", key=f"select_{video['id']}"):
-                        st.session_state.selected_video_url = video['link']
-                        st.session_state.selected_video_data = video
-                        st.rerun()
-            st.markdown("---")
-    render_pagination()
+    
+    if not page_results:
+        st.info("Aucun résultat à afficher pour cette page.")
+    else:
+        for video in page_results:
+            if video.get('link') and video.get('title'):
+                with st.container():
+                    col_img, col_info, col_button = st.columns([1, 3, 1])
+                    with col_img:
+                        thumbnail_list = video.get('thumbnail', [])
+                        if thumbnail_list: 
+                            st.image(thumbnail_list[0]['url'], width=120, use_column_width=True)
+                    with col_info:
+                        title = video.get('title', 'Titre non disponible')
+                        channel_name = get_nested_data(video, 'channel', 'name', 'Chaîne inconnue')
+                        view_text = get_nested_data(video, 'viewCount', 'text', 'N/A vues')
+                        duration_text = get_nested_data(video, 'duration', 'text', 'N/A')
+                        st.markdown(f"**{title}**")
+                        st.caption(f"👤 {channel_name} | 👁️ {view_text} | ⏱️ {duration_text}")
+                    with col_button:
+                        if st.button("Sélectionner", key=f"select_{video['id']}"):
+                            st.session_state.selected_video_url = video['link']
+                            st.session_state.selected_video_data = video
+                            st.rerun()
+                st.markdown("---")
+        render_pagination()
 
+# Affichage de la vidéo sélectionnée
 if st.session_state.selected_video_url and st.session_state.selected_video_data:
-    st.subheader("Lecteur Vidéo")
+    st.subheader("🎬 Lecteur Vidéo")
     display_metadata(st.session_state.selected_video_data)
+    
     video_id = get_video_id(st.session_state.selected_video_url)
     if video_id:
         embed_url = f"https://www.youtube.com/embed/{video_id}"
-        st.components.v1.iframe(embed_url, height=600)
-        if st.sidebar.button("⬇️ Télécharger la vidéo sélectionnée"):
-            file_path, file_name, mime_type = download_media(st.session_state.selected_video_url, download_format)
-            if file_path:
-                display_custom_status("TÉLÉCHARGEMENT TERMINÉ. PRÊT POUR LE TRANSFERT.", "success")
-                with open(file_path, "rb") as f: bytes_data = f.read()
-                st.sidebar.download_button(label=f"CLIQUER POUR TÉLÉCHARGER EN {download_format}", data=bytes_data, file_name=file_name, mime=mime_type)
-                os.unlink(file_path)
-    else: display_custom_status("ERREUR : Impossible de lire l'URL de la vidéo sélectionnée.", "error")
-elif not st.session_state.search_results:
-    display_custom_status("VEUILLEZ LANCER UNE RECHERCHE POUR COMMENCER.", "info")
+        st.components.v1.iframe(embed_url, height=400)
+        
+        col1, col2 = st.columns([1, 1])
+        with col1:
+            if st.button("⬇️ Télécharger la vidéo", use_container_width=True):
+                if not st.session_state.download_in_progress:
+                    file_path, file_name, mime_type = download_media(
+                        st.session_state.selected_video_url, 
+                        download_format
+                    )
+                    if file_path:
+                        try:
+                            with open(file_path, "rb") as f:
+                                bytes_data = f.read()
+                            
+                            st.download_button(
+                                label=f"💾 Télécharger {file_name}",
+                                data=bytes_data,
+                                file_name=file_name,
+                                mime=mime_type,
+                                use_container_width=True
+                            )
+                        finally:
+                            # Nettoyage du fichier temporaire
+                            try:
+                                os.unlink(file_path)
+                                os.rmdir(os.path.dirname(file_path))
+                            except:
+                                pass
+        with col2:
+            if st.button("🗑️ Effacer la sélection", use_container_width=True):
+                st.session_state.selected_video_url = None
+                st.session_state.selected_video_data = None
+                st.rerun()
+    else:
+        display_custom_status("ERREUR : Impossible de lire l'URL de la vidéo sélectionnée.", "error")
+
+elif not st.session_state.search_results and not st.session_state.selected_video_url:
+    st.info("🔍 Veuillez lancer une recherche ou coller une URL YouTube pour commencer.")
+
+# Pied de page
+st.sidebar.markdown("---")
+st.sidebar.markdown("""
+<div style='text-align: center; color: #666; font-size: 0.8em;'>
+    <p>CYBER-STREAM TERMINAL v2.0</p>
+    <p>Utilise yt-dlp pour le téléchargement</p>
+</div>
+""", unsafe_allow_html=True)

@@ -30,7 +30,8 @@ session_defaults = {
     'ffmpeg_source': None,
     'ffmpeg_installation_tried': False,
     'download_history': [],
-    'dependencies_checked': False
+    'dependencies_checked': False,
+    'debug_mode': False  # Nouveau paramètre pour le débogage
 }
 
 for key, value in session_defaults.items():
@@ -254,6 +255,18 @@ def load_css(theme_name):
                 0%, 100% { opacity: 1; }
                 50% { opacity: 0.5; }
             }
+            .debug-box {
+                background: rgba(128, 0, 128, 0.1);
+                border: 1px solid #800080;
+                padding: 15px;
+                border-radius: 10px;
+                margin: 10px 0;
+                font-family: monospace;
+                font-size: 0.8rem;
+                white-space: pre-wrap;
+                max-height: 200px;
+                overflow-y: auto;
+            }
         </style>
         """
         st.markdown(cyberpunk_css, unsafe_allow_html=True)
@@ -332,29 +345,70 @@ def search_youtube(query, limit=15):
     try:
         clean_query = safe_search_query(query)
         if not clean_query:
+            st.warning("⚠️ Recherche vide, utilisation des résultats de démonstration")
             return get_demo_results("exemple")
         
+        # Vérifier si yt-dlp est disponible
+        yt_dlp_available, yt_dlp_version = check_yt_dlp()
+        if not yt_dlp_available:
+            st.error("❌ yt-dlp n'est pas disponible. Installation requise.")
+            return get_demo_results(query)
+        
+        # Commande de recherche améliorée
         search_command = [
             'yt-dlp',
-            f'ytsearch{limit}:"{clean_query}"',
+            f'ytsearch{limit}:{clean_query}',
             '--dump-json',
             '--no-download',
             '--no-warnings',
-            '--quiet',
             '--ignore-errors',
             '--socket-timeout', '30',
-            '--source-timeout', '30'
+            '--retries', '3',
+            '--fragment-retries', '3'
         ]
+        
+        # Journalisation pour le débogage
+        if st.session_state.debug_mode:
+            st.markdown(f"""
+            <div class='debug-box'>
+            Commande de recherche: {' '.join(search_command)}
+            </div>
+            """, unsafe_allow_html=True)
         
         result = subprocess.run(
             search_command, 
             capture_output=True, 
             text=True, 
-            timeout=45
+            timeout=60
         )
         
+        # Journalisation pour le débogage
+        if st.session_state.debug_mode:
+            st.markdown(f"""
+            <div class='debug-box'>
+            Code de retour: {result.returncode}
+            Sortie standard: {result.stdout[:500] if result.stdout else "Vide"}
+            Erreur: {result.stderr[:500] if result.stderr else "Vide"}
+            </div>
+            """, unsafe_allow_html=True)
+        
+        # Vérifier si la commande a réussi
+        if result.returncode != 0:
+            st.error(f"❌ Erreur lors de la recherche: {result.stderr}")
+            return get_demo_results(query)
+        
+        # Traiter les résultats
         videos = []
-        for line in result.stdout.splitlines():
+        output_lines = result.stdout.splitlines()
+        
+        if st.session_state.debug_mode:
+            st.markdown(f"""
+            <div class='debug-box'>
+            Nombre de lignes retournées: {len(output_lines)}
+            </div>
+            """, unsafe_allow_html=True)
+        
+        for line in output_lines:
             if line.strip():
                 try:
                     video_data = json.loads(line)
@@ -374,13 +428,27 @@ def search_youtube(query, limit=15):
                         'upload_date': video_data.get('upload_date', ''),
                         'description': video_data.get('description', '')[:200] + '...' if video_data.get('description') else ''
                     })
-                except json.JSONDecodeError:
+                except json.JSONDecodeError as e:
+                    if st.session_state.debug_mode:
+                        st.markdown(f"""
+                        <div class='debug-box'>
+                        Erreur de décodage JSON: {str(e)}
+                        Ligne: {line[:100] if line else "Vide"}
+                        </div>
+                        """, unsafe_allow_html=True)
                     continue
         
-        return videos if videos else get_demo_results(query)
+        if videos:
+            return videos
+        else:
+            st.warning("⚠️ Aucun résultat trouvé, utilisation des résultats de démonstration")
+            return get_demo_results(query)
         
+    except subprocess.TimeoutExpired:
+        st.error("⏱️ Timeout lors de la recherche")
+        return get_demo_results(query)
     except Exception as e:
-        st.error(f"Erreur lors de la recherche: {str(e)}")
+        st.error(f"❌ Erreur inattendue lors de la recherche: {str(e)}")
         return get_demo_results(query)
 
 def get_demo_results(query):
@@ -760,6 +828,11 @@ with st.sidebar.expander("💻 Informations Système"):
     st.write(f"**Python:** {system_info['python_version']}")
     st.write(f"**Architecture:** {system_info['architecture']}")
 
+# Debug mode
+st.sidebar.subheader("🔧 Débogage")
+debug_mode = st.sidebar.checkbox("Mode débogage", value=st.session_state.debug_mode)
+st.session_state.debug_mode = debug_mode
+
 st.sidebar.markdown("---")
 
 # Contrôles de recherche
@@ -797,6 +870,10 @@ if direct_url and validate_youtube_url(direct_url):
 if st.sidebar.button("🚀 Lancer la recherche", use_container_width=True):
     if search_query.strip():
         with st.spinner("Recherche en cours..."):
+            # Vider le cache pour forcer une nouvelle recherche
+            if 'search_youtube' in st.session_state:
+                del st.session_state['search_youtube']
+            
             results = search_youtube(search_query)
             st.session_state.search_results = results
             st.session_state.total_pages = max(1, math.ceil(len(results) / 3))

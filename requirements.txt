@@ -1,3 +1,4 @@
 streamlit
 yt-dlp
-imageio-ffmpeg
+ffmpeg-python
+requests

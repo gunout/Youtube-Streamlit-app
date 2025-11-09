@@ -1,3 +1,4 @@
 streamlit
 pytube
 yt-dlp
+git+https://github.com/alexmercerind/youtube-search-python

@@ -109,8 +109,15 @@ def display_metadata(video_data):
         duration_text = get_nested_data(video_data, 'duration', 'text', 'N/A')
         st.markdown(f"<div class='metadata-card-text'><h3>{title}</h3><p>Chaîne : {channel_name}</p><p>Vues : {view_text} | Durée : {duration_text}</p></div>", unsafe_allow_html=True)
 
-# --- FONCTION DE RECHERCHE AVEC YT-DLP ---
+# --- FONCTION DE RECHERCHE AVEC YT-DLP ET CACHE ---
+# @st.cache_data mémorise les résultats pour éviter de re-lancer la recherche à chaque fois.
+# Le cache expire après 1 heure (3600 secondes).
+@st.cache_data(ttl=3600, show_spinner="Recherche sur YouTube... Veuillez patienter.")
 def search_youtube(query, limit=30):
+    """
+    Recherche des vidéos sur YouTube en utilisant yt-dlp.
+    Les résultats sont mis en cache pendant une heure pour accélérer les recherches répétées.
+    """
     try:
         search_command = [
             'yt-dlp',
@@ -205,11 +212,13 @@ search_query = st.sidebar.text_input("🔍 Rechercher des vidéos :", key="searc
 download_format = st.sidebar.selectbox("Format de Téléchargement", ["MP4 (Vidéo)", "MP3 (Audio)"])
 
 if st.sidebar.button("Lancer la recherche") and search_query:
-    with st.spinner("Recherche en cours..."):
-        results = search_youtube(search_query, limit=30)
-        st.session_state.search_results = results
-        st.session_state.total_pages = math.ceil(len(results) / 3)
-        st.session_state.current_page = 1
+    # La fonction search_youtube est maintenant appelée ici.
+    # Si la recherche est nouvelle, elle prendra du temps.
+    # Si elle est dans le cache, le résultat sera instantané.
+    results = search_youtube(search_query, limit=30)
+    st.session_state.search_results = results
+    st.session_state.total_pages = math.ceil(len(results) / 3)
+    st.session_state.current_page = 1
     st.session_state.selected_video_url = None
     st.session_state.selected_video_data = None
     st.rerun()
